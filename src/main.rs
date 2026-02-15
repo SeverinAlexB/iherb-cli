@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{Cli, Commands, Section, SortOrder};
 use config::AppConfig;
+use std::time::SystemTime;
 
 use crate::browser::session::BrowserSession;
 use crate::cache::Cache;
@@ -97,10 +98,11 @@ async fn cmd_search(
 
     let cache = Cache::new(config.cache_dir.clone(), config.no_cache);
 
-    if let Some(cached) = cache.get_search::<model::SearchResult>(query, sort, category) {
-        let mut result = cached;
+    if let Some(hit) = cache.get_search::<model::SearchResult>(query, sort, category) {
+        let mut result = hit.data;
         result.products.truncate(limit);
         print!("{}", output::format_search_results(&result));
+        println!("\n- **Data from:** {}", output::format_cached_at(hit.cached_at));
         return Ok(());
     }
 
@@ -163,6 +165,7 @@ async fn cmd_search(
     result.products.truncate(limit);
 
     print!("{}", output::format_search_results(&result));
+    println!("\n- **Data from:** {}", output::format_cached_at(SystemTime::now()));
     Ok(())
 }
 
@@ -175,8 +178,9 @@ async fn cmd_product(
     let product_id = parse_product_identifier(id_or_url)?;
     let cache = Cache::new(config.cache_dir.clone(), config.no_cache);
 
-    if let Some(cached) = cache.get_product::<model::ProductDetail>(&product_id) {
-        print!("{}", output::format_product_detail(&cached, section));
+    if let Some(hit) = cache.get_product::<model::ProductDetail>(&product_id) {
+        print!("{}", output::format_product_detail(&hit.data, section));
+        println!("\n- **Data from:** {}", output::format_cached_at(hit.cached_at));
         return Ok(());
     }
 
@@ -216,6 +220,7 @@ async fn cmd_product(
     }
 
     print!("{}", output::format_product_detail(&product, section));
+    println!("\n- **Data from:** {}", output::format_cached_at(SystemTime::now()));
     Ok(())
 }
 

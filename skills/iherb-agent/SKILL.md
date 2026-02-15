@@ -5,7 +5,7 @@ description: Query supplement and health product data from iHerb using the iherb
 
 # iherb-agent
 
-Use the `iherb-cli` binary to query iHerb product data. It uses a headless browser (first run may take a moment to download Chrome). Results are cached (1h for searches, 24h for products).
+Use the `iherb-cli` binary to query iHerb product data. It uses a headless browser (first run may take a moment to download Chrome). Results are cached for 30 days. Every result includes a `Data from:` timestamp — use `--no-cache` if the data is stale.
 
 ## Commands
 

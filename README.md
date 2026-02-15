@@ -154,12 +154,9 @@ currency = "CHF"
 
 Scraped data is cached locally to `~/.cache/iherb-cli/` to reduce redundant requests.
 
-| Data | TTL |
-|---|---|
-| Product details | 24 hours |
-| Search results | 1 hour |
+All cached data expires after **30 days**.
 
-Use `--no-cache` to bypass the cache for any command.
+Every result includes a `Data from:` timestamp so you know how fresh the data is. Use `--no-cache` to bypass the cache and fetch fresh data.
 
 ## How it works
 

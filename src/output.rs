@@ -1,5 +1,6 @@
 use crate::cli::Section;
 use crate::model::{ProductDetail, SearchResult};
+use std::time::SystemTime;
 
 pub fn format_search_results(result: &SearchResult) -> String {
     let mut out = String::new();
@@ -218,6 +219,54 @@ fn format_price(price: f64, original: Option<&f64>, currency: &str) -> String {
         }
         _ => format!("{}{:.2}", symbol, price),
     }
+}
+
+pub fn format_cached_at(cached_at: SystemTime) -> String {
+    let duration = cached_at
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = duration.as_secs() as i64;
+
+    // Simple date formatting without extra dependencies
+    let days = secs / 86400;
+    let remaining = secs % 86400;
+    let hours = remaining / 3600;
+    let minutes = (remaining % 3600) / 60;
+
+    // Calculate year/month/day from epoch days
+    let mut y = 1970i64;
+    let mut d = days;
+    loop {
+        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
+        if d < days_in_year {
+            break;
+        }
+        d -= days_in_year;
+        y += 1;
+    }
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ];
+    let mut m = 0usize;
+    for (i, &md) in month_days.iter().enumerate() {
+        if d < md {
+            m = i;
+            break;
+        }
+        d -= md;
+    }
+
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02} UTC",
+        y,
+        m + 1,
+        d + 1,
+        hours,
+        minutes
+    )
 }
 
 fn format_number(n: u32) -> String {
