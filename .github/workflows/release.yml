@@ -22,15 +22,19 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             archive: tar.gz
+            name: linux-amd64
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: tar.gz
+            name: macos-arm64
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: tar.gz
+            name: macos-amd64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive: zip
+            name: windows-amd64
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -47,18 +51,18 @@ jobs:
         if: matrix.archive == 'tar.gz'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../iherb-cli-${{ matrix.target }}.tar.gz iherb-cli
+          tar czf ../../../iherb-cli-${{ matrix.name }}.tar.gz iherb-cli
 
       - name: Package (Windows)
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          Compress-Archive -Path target/${{ matrix.target }}/release/iherb-cli.exe -DestinationPath iherb-cli-${{ matrix.target }}.zip
+          Compress-Archive -Path target/${{ matrix.target }}/release/iherb-cli.exe -DestinationPath iherb-cli-${{ matrix.name }}.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: iherb-cli-${{ matrix.target }}
-          path: iherb-cli-${{ matrix.target }}.*
+          name: iherb-cli-${{ matrix.name }}
+          path: iherb-cli-${{ matrix.name }}.*
 
   release:
     name: Create Release
