@@ -118,4 +118,16 @@ impl Section {
         Section::Warnings,
         Section::Reviews,
     ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Section::Overview => "overview",
+            Section::Description => "description",
+            Section::Nutrition => "nutrition",
+            Section::Ingredients => "ingredients",
+            Section::SuggestedUse => "suggested use",
+            Section::Warnings => "warnings",
+            Section::Reviews => "review",
+        }
+    }
 }

@@ -160,3 +160,11 @@ impl BrowserSession {
         Ok(())
     }
 }
+
+impl Drop for BrowserSession {
+    fn drop(&mut self) {
+        if self.user_data_dir.exists() {
+            let _ = std::fs::remove_dir_all(&self.user_data_dir);
+        }
+    }
+}

@@ -68,6 +68,12 @@ pub fn format_product_detail(product: &ProductDetail, section: Option<Section>) 
         }
     }
 
+    if out.is_empty() {
+        if let Some(sec) = section {
+            out.push_str(&format!("No {} data available for this product.\n", sec.label()));
+        }
+    }
+
     out
 }
 

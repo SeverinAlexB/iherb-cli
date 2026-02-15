@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
     )?;
 
     ctrlc::set_handler(|| {
-        eprintln!("\nInterrupted. Cleaning up...");
+        eprintln!("\nInterrupted.");
         std::process::exit(130);
     })
     .context("Failed to set Ctrl+C handler")?;
@@ -88,6 +88,13 @@ async fn cmd_search(
     sort: SortOrder,
     category: Option<&str>,
 ) -> Result<()> {
+    if query.trim().is_empty() {
+        anyhow::bail!("Search query cannot be empty");
+    }
+    if limit == 0 {
+        anyhow::bail!("Limit must be at least 1");
+    }
+
     let cache = Cache::new(config.cache_dir.clone(), config.no_cache);
 
     if let Some(cached) = cache.get_search::<model::SearchResult>(query, sort, category) {
@@ -141,17 +148,19 @@ async fn cmd_search(
         anyhow::bail!("No search results found for: {}", query);
     }
 
-    all_products.truncate(limit);
-
-    let result = model::SearchResult {
+    // Cache the full result set before truncating
+    let full_result = model::SearchResult {
         query: query.to_string(),
         total_results,
         products: all_products,
     };
 
-    if let Err(e) = cache.set_search(query, sort, category, &result) {
+    if let Err(e) = cache.set_search(query, sort, category, &full_result) {
         tracing::debug!("Failed to cache search results: {}", e);
     }
+
+    let mut result = full_result;
+    result.products.truncate(limit);
 
     print!("{}", output::format_search_results(&result));
     Ok(())

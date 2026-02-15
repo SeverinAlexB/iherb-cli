@@ -1,12 +1,50 @@
 use scraper::{Html, Selector};
 
-/// Parse a price string by extracting digits and decimal points.
+/// Parse a price string by extracting digits, periods, and commas, then
+/// determine the decimal separator based on position and context.
+/// Handles both US format (1,234.56) and European format (1.234,56).
 pub fn parse_price_str(s: &str) -> Option<f64> {
+    // Keep only digits, periods, and commas
     let cleaned: String = s
         .chars()
-        .filter(|c| c.is_ascii_digit() || *c == '.')
+        .filter(|c| c.is_ascii_digit() || *c == '.' || *c == ',')
         .collect();
-    cleaned.parse().ok()
+
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    let has_dot = cleaned.contains('.');
+    let has_comma = cleaned.contains(',');
+
+    let normalized = if has_dot && has_comma {
+        // Both present: the LAST one is the decimal separator
+        let last_dot = cleaned.rfind('.').unwrap();
+        let last_comma = cleaned.rfind(',').unwrap();
+        if last_comma > last_dot {
+            // Comma is decimal (European: 1.234,56)
+            cleaned.replace('.', "").replacen(',', ".", 1)
+        } else {
+            // Dot is decimal (US: 1,234.56)
+            cleaned.replace(',', "")
+        }
+    } else if has_comma {
+        // Only commas: check if it looks like a thousands separator
+        let last_comma = cleaned.rfind(',').unwrap();
+        let after_comma = &cleaned[last_comma + 1..];
+        if after_comma.len() == 3 && after_comma.chars().all(|c| c.is_ascii_digit()) {
+            // Exactly 3 digits after last comma => thousands separator (e.g. "1,000")
+            cleaned.replace(',', "")
+        } else {
+            // Otherwise treat comma as decimal (e.g. "23,99")
+            cleaned.replacen(',', ".", 1)
+        }
+    } else {
+        // Only dots or no separator at all: parse normally
+        cleaned
+    };
+
+    normalized.parse().ok()
 }
 
 /// Extract text from a document by trying comma-separated CSS selectors.

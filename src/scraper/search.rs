@@ -42,10 +42,7 @@ pub fn build_search_url(
 }
 
 fn urlencoded(s: &str) -> String {
-    s.replace(' ', "+")
-        .replace('&', "%26")
-        .replace('=', "%3D")
-        .replace('#', "%23")
+    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
 
 /// Extract search results from a page, trying data attributes first, then __NEXT_DATA__, then DOM text.
@@ -285,7 +282,13 @@ fn parse_product_card(
 
     let product_url = link_attrs
         .and_then(|a| a.attr("href"))
-        .map(|s| s.to_string())
+        .map(|u| {
+            if u.starts_with("http") {
+                u.to_string()
+            } else {
+                format!("{}{}", base_url, u)
+            }
+        })
         .unwrap_or_else(|| format!("{}/pr/p/{}", base_url, product_id));
 
     Some(ProductSummary {

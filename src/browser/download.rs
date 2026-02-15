@@ -119,6 +119,12 @@ fn extract_zip(data: &[u8], dest: &PathBuf) -> Result<(), IherbError> {
 
         let out_path = dest.join(stripped);
 
+        // Protect against zip path traversal
+        if !out_path.starts_with(&dest) {
+            tracing::warn!("Skipping zip entry with path traversal: {}", name);
+            continue;
+        }
+
         if file.is_dir() {
             std::fs::create_dir_all(&out_path)
                 .map_err(|e| IherbError::ChromeDownload(format!("Failed to create dir: {}", e)))?;

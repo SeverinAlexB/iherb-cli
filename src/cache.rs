@@ -64,7 +64,9 @@ impl Cache {
     fn search_key(&self, query: &str, sort: SortOrder, category: Option<&str>) -> String {
         let mut hasher = Sha256::new();
         hasher.update(query.as_bytes());
+        hasher.update(b"\0");
         hasher.update(sort.as_cache_key().as_bytes());
+        hasher.update(b"\0");
         if let Some(cat) = category {
             hasher.update(cat.as_bytes());
         }

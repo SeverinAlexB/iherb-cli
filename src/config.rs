@@ -69,6 +69,8 @@ impl AppConfig {
 
         let delay_ms = delay.or(file_config.defaults.delay_ms).unwrap_or(2000);
 
+        Self::validate_country(&country)?;
+
         Ok(AppConfig {
             country,
             currency,
@@ -79,6 +81,26 @@ impl AppConfig {
             cache_dir,
             data_dir,
         })
+    }
+
+    pub fn validate_country(country: &str) -> Result<(), IherbError> {
+        const KNOWN_COUNTRIES: &[&str] = &[
+            "us", "ca", "au", "nz", "sg", "hk", "tw", "kr", "jp",
+            "sa", "ae", "kw", "il",
+            "de", "fr", "es", "it", "nl", "be", "at", "ch",
+            "se", "no", "dk", "fi", "pl", "cz", "ie", "pt", "gr",
+            "ru", "tr", "in", "th", "my", "ph", "id", "vn",
+            "br", "mx", "cl", "co", "ar",
+            "za", "eg", "ng", "ke",
+            "cn",
+        ];
+        if !KNOWN_COUNTRIES.contains(&country) {
+            return Err(IherbError::Navigation(format!(
+                "Unknown country code '{}'. iHerb may not support this subdomain. Known codes include: us, ca, de, fr, ch, au, jp, kr, etc.",
+                country
+            )));
+        }
+        Ok(())
     }
 
     pub fn base_url(&self) -> String {
