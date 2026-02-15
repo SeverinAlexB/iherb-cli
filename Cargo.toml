@@ -1,0 +1,50 @@
+[package]
+name = "iherb-cli"
+version = "0.1.0"
+edition = "2021"
+description = "CLI tool for querying iHerb product data"
+
+[[bin]]
+name = "iherb-cli"
+path = "src/main.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# Browser automation
+chromiumoxide = { version = "0.7", features = ["tokio-runtime"], default-features = false }
+
+# HTTP
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# HTML parsing
+scraper = "0.21"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+dirs = "6"
+sha2 = "0.10"
+hex = "0.4"
+zip = "2"
+url = "2"
+regex = "1"
+
+# Ctrl+C handling
+ctrlc = { version = "3", features = ["termination"] }
