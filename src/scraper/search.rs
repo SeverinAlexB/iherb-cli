@@ -1,24 +1,24 @@
+use crate::cli::SortOrder;
 use crate::error::IherbError;
 use crate::model::{ProductSummary, SearchResult};
 use chromiumoxide::Page;
 use scraper::{Html, Selector};
+
+use super::helpers::{
+    debug_dump_html, detect_currency_from_html, extract_element_text, parse_price_str,
+    parse_review_count,
+};
 
 const RESULTS_PER_PAGE: usize = 48;
 
 pub fn build_search_url(
     base_url: &str,
     query: &str,
-    sort: &str,
+    sort: SortOrder,
     category: Option<&str>,
     page_num: usize,
 ) -> String {
-    let sort_param = match sort {
-        "price-asc" => "&sr=4",
-        "price-desc" => "&sr=3",
-        "rating" => "&sr=1",
-        "best-selling" => "&sr=2",
-        _ => "", // relevance is default
-    };
+    let sort_param = sort.as_url_param();
 
     let category_param = match category {
         Some(cat) => format!("&cids={}", cat),
@@ -56,12 +56,7 @@ pub async fn extract_search(
     base_url: &str,
     currency: &str,
 ) -> Result<SearchResult, IherbError> {
-    // Dump HTML for debugging
-    if tracing::enabled!(tracing::Level::DEBUG) {
-        let dump_path = format!("/tmp/iherb_search_{}.html", query.replace(' ', "_"));
-        let _ = std::fs::write(&dump_path, html);
-        tracing::debug!("Dumped search HTML to {}", dump_path);
-    }
+    debug_dump_html(html, &format!("search_{}", query.replace(' ', "_")));
 
     // Try __NEXT_DATA__ first (may exist on some page versions)
     if let Ok(Some(next_data)) = super::extract::extract_next_data(page).await {
@@ -204,136 +199,21 @@ pub fn parse_search_from_html(
     currency: &str,
 ) -> Result<SearchResult, IherbError> {
     let doc = Html::parse_document(html);
-
     let total_results = extract_total_results(&doc);
-
-    // Detect actual currency from the page, falling back to config currency
     let detected_currency = detect_currency_from_html(&doc).unwrap_or_else(|| currency.to_string());
 
     let mut products = Vec::new();
-
-    // Primary strategy: Find product-cell-container cards and extract data from
-    // the <a class="absolute-link product-link"> inside each card, which carries
-    // rich data-ga-* attributes (brand, price, product ID, etc.)
     let card_sel = Selector::parse("div.product-cell-container").ok();
     let link_sel = Selector::parse("a.absolute-link.product-link, a.product-link").ok();
 
     if let (Some(card_sel), Some(link_sel)) = (card_sel, link_sel) {
         let cards: Vec<_> = doc.select(&card_sel).collect();
         tracing::debug!("Found {} product-cell-container cards", cards.len());
-
-        for card_el in &cards {
-            // Find the product link with data attributes
-            let link = card_el.select(&link_sel).next();
-            let link_attrs = link.as_ref().map(|l| l.value());
-
-            // Product ID from data attributes or URL
-            let product_id = link_attrs
-                .and_then(|a| {
-                    a.attr("data-product-id")
-                        .or_else(|| a.attr("data-ga-product-id"))
-                })
-                .map(|s| s.to_string())
-                .or_else(|| {
-                    link_attrs
-                        .and_then(|a| a.attr("href"))
-                        .and_then(|url| extract_id_from_url(url))
-                });
-
-            // Title from .product-title content attr or bdi text
-            let name = extract_card_attr(card_el, "div.product-title", "content")
-                .or_else(|| {
-                    extract_card_text_inner(card_el, "div.product-title bdi, div.product-title")
-                })
-                .or_else(|| {
-                    link_attrs
-                        .and_then(|a| a.attr("title"))
-                        .map(|s| s.to_string())
-                });
-
-            // Brand from data-ga-brand-name on the link
-            let brand = link_attrs
-                .and_then(|a| a.attr("data-ga-brand-name"))
-                .map(|s| s.to_string());
-
-            // Price from meta[itemprop="price"] or data-ga-discount-price
-            let price = extract_card_attr(card_el, "meta[itemprop='price']", "content")
-                .and_then(|s| parse_price(&s))
-                .or_else(|| {
-                    link_attrs
-                        .and_then(|a| a.attr("data-ga-discount-price"))
-                        .and_then(|s| parse_price(s))
-                })
-                .unwrap_or(0.0);
-
-            // Original price from .price-olp
-            let original_price =
-                extract_card_text_inner(card_el, "span.price-olp bdi, span.price-olp")
-                    .and_then(|s| parse_price(&s))
-                    .filter(|&p| p > price);
-
-            // Rating from a.stars title attribute (format: "4.8/5 - 373,798 Reviews")
-            let rating = card_el
-                .select(
-                    &Selector::parse("a.stars").unwrap_or_else(|_| Selector::parse("a").unwrap()),
-                )
-                .next()
-                .and_then(|el| el.value().attr("title"))
-                .and_then(|title| title.split('/').next()?.trim().parse::<f64>().ok());
-
-            // Review count from a.rating-count span
-            let review_count =
-                extract_card_text_inner(card_el, "a.rating-count span").and_then(|s| {
-                    s.replace(',', "")
-                        .chars()
-                        .filter(|c| c.is_ascii_digit())
-                        .collect::<String>()
-                        .parse::<u32>()
-                        .ok()
-                });
-
-            // Stock status
-            let in_stock = card_el
-                .select(
-                    &Selector::parse("div.product.ga-product, div.product")
-                        .unwrap_or_else(|_| Selector::parse("div").unwrap()),
-                )
-                .next()
-                .and_then(|el| el.value().attr("data-is-out-of-stock"))
-                .map(|s| s.to_lowercase() != "true")
-                .or_else(|| {
-                    link_attrs
-                        .and_then(|a| a.attr("data-ga-is-out-of-stock"))
-                        .map(|s| s.to_lowercase() != "true")
-                })
-                .unwrap_or(true);
-
-            // Product URL
-            let product_url = link_attrs
-                .and_then(|a| a.attr("href"))
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| {
-                    product_id
-                        .as_ref()
-                        .map(|id| format!("{}/pr/p/{}", base_url, id))
-                        .unwrap_or_default()
-                });
-
-            if let (Some(name), Some(id)) = (name, product_id) {
-                products.push(ProductSummary {
-                    name,
-                    brand: brand.unwrap_or_default(),
-                    price,
-                    original_price,
-                    currency: detected_currency.clone(),
-                    rating,
-                    review_count,
-                    product_url,
-                    product_id: id,
-                    in_stock,
-                });
-            }
-        }
+        products.extend(
+            cards
+                .iter()
+                .filter_map(|card| parse_product_card(card, &link_sel, &detected_currency, base_url)),
+        );
     }
 
     if !products.is_empty() {
@@ -349,9 +229,106 @@ pub fn parse_search_from_html(
     })
 }
 
+fn parse_product_card(
+    card_el: &scraper::ElementRef,
+    link_sel: &Selector,
+    currency: &str,
+    base_url: &str,
+) -> Option<ProductSummary> {
+    let link = card_el.select(link_sel).next();
+    let link_attrs = link.as_ref().map(|l| l.value());
+
+    let product_id = link_attrs
+        .and_then(|a| {
+            a.attr("data-product-id")
+                .or_else(|| a.attr("data-ga-product-id"))
+        })
+        .map(|s| s.to_string())
+        .or_else(|| {
+            link_attrs
+                .and_then(|a| a.attr("href"))
+                .and_then(extract_id_from_url)
+        })?;
+
+    let name = extract_card_attr(card_el, "div.product-title", "content")
+        .or_else(|| extract_element_text(card_el, "div.product-title bdi, div.product-title"))
+        .or_else(|| {
+            link_attrs
+                .and_then(|a| a.attr("title"))
+                .map(|s| s.to_string())
+        })?;
+
+    let brand = link_attrs
+        .and_then(|a| a.attr("data-ga-brand-name"))
+        .unwrap_or("")
+        .to_string();
+
+    let price = extract_card_attr(card_el, "meta[itemprop='price']", "content")
+        .and_then(|s| parse_price_str(&s))
+        .or_else(|| {
+            link_attrs
+                .and_then(|a| a.attr("data-ga-discount-price"))
+                .and_then(parse_price_str)
+        })
+        .unwrap_or(0.0);
+
+    let original_price = extract_element_text(card_el, "span.price-olp bdi, span.price-olp")
+        .and_then(|s| parse_price_str(&s))
+        .filter(|&p| p > price);
+
+    let rating = extract_card_rating(card_el);
+
+    let review_count = extract_element_text(card_el, "a.rating-count span")
+        .and_then(|s| parse_review_count(&s));
+
+    let in_stock = extract_card_stock_status(card_el, link_attrs);
+
+    let product_url = link_attrs
+        .and_then(|a| a.attr("href"))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("{}/pr/p/{}", base_url, product_id));
+
+    Some(ProductSummary {
+        name,
+        brand,
+        price,
+        original_price,
+        currency: currency.to_string(),
+        rating,
+        review_count,
+        product_url,
+        product_id,
+        in_stock,
+    })
+}
+
+fn extract_card_rating(card_el: &scraper::ElementRef) -> Option<f64> {
+    let sel = Selector::parse("a.stars").ok()?;
+    let el = card_el.select(&sel).next()?;
+    let title = el.value().attr("title")?;
+    title.split('/').next()?.trim().parse::<f64>().ok()
+}
+
+fn extract_card_stock_status(
+    card_el: &scraper::ElementRef,
+    link_attrs: Option<&scraper::node::Element>,
+) -> bool {
+    Selector::parse("div.product.ga-product, div.product")
+        .ok()
+        .and_then(|sel| card_el.select(&sel).next())
+        .and_then(|el| el.value().attr("data-is-out-of-stock"))
+        .map(|s| s.to_lowercase() != "true")
+        .or_else(|| {
+            link_attrs
+                .and_then(|a| a.attr("data-ga-is-out-of-stock"))
+                .map(|s| s.to_lowercase() != "true")
+        })
+        .unwrap_or(true)
+}
+
 /// Calculate how many pages needed for the desired limit.
 pub fn pages_needed(limit: usize) -> usize {
-    (limit + RESULTS_PER_PAGE - 1) / RESULTS_PER_PAGE
+    limit.div_ceil(RESULTS_PER_PAGE)
 }
 
 fn extract_card_attr(el: &scraper::ElementRef, selector: &str, attr: &str) -> Option<String> {
@@ -362,25 +339,6 @@ fn extract_card_attr(el: &scraper::ElementRef, selector: &str, attr: &str) -> Op
         .attr(attr)
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty())
-}
-
-fn extract_card_text_inner(el: &scraper::ElementRef, selectors: &str) -> Option<String> {
-    for sel_str in selectors.split(',') {
-        if let Ok(sel) = Selector::parse(sel_str.trim()) {
-            if let Some(child) = el.select(&sel).next() {
-                let text: String = child
-                    .text()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .trim()
-                    .to_string();
-                if !text.is_empty() {
-                    return Some(text);
-                }
-            }
-        }
-    }
-    None
 }
 
 fn extract_id_from_url(url: &str) -> Option<String> {
@@ -431,62 +389,3 @@ fn extract_total_results(doc: &Html) -> Option<u32> {
     None
 }
 
-/// Detect the actual currency from the page via meta tags or price text.
-pub fn detect_currency_from_html(doc: &Html) -> Option<String> {
-    // Try meta[itemprop="priceCurrency"]
-    if let Ok(sel) = Selector::parse("meta[itemprop='priceCurrency']") {
-        if let Some(el) = doc.select(&sel).next() {
-            if let Some(code) = el.value().attr("content") {
-                let code = code.trim().to_uppercase();
-                if !code.is_empty() {
-                    tracing::debug!("Detected currency from meta tag: {}", code);
-                    return Some(code);
-                }
-            }
-        }
-    }
-
-    // Try to detect from price text (e.g., "CHF 4.46", "$4.46", "€4.46")
-    if let Ok(sel) = Selector::parse("span.price bdi, div.price bdi, .product-price bdi") {
-        if let Some(el) = doc.select(&sel).next() {
-            let text: String = el.text().collect::<Vec<_>>().join("").trim().to_string();
-            if let Some(currency) = detect_currency_from_text(&text) {
-                tracing::debug!("Detected currency from price text: {}", currency);
-                return Some(currency);
-            }
-        }
-    }
-
-    None
-}
-
-fn detect_currency_from_text(text: &str) -> Option<String> {
-    let text = text.trim();
-    if text.starts_with('$') {
-        Some("USD".to_string())
-    } else if text.starts_with('€') {
-        Some("EUR".to_string())
-    } else if text.starts_with('£') {
-        Some("GBP".to_string())
-    } else if text.starts_with("CHF") {
-        Some("CHF".to_string())
-    } else if text.starts_with("CA$") || text.starts_with("C$") {
-        Some("CAD".to_string())
-    } else if text.starts_with("A$") || text.starts_with("AU$") {
-        Some("AUD".to_string())
-    } else if text.starts_with("¥") {
-        Some("JPY".to_string())
-    } else if text.starts_with("₩") {
-        Some("KRW".to_string())
-    } else {
-        None
-    }
-}
-
-fn parse_price(s: &str) -> Option<f64> {
-    let cleaned: String = s
-        .chars()
-        .filter(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    cleaned.parse().ok()
-}

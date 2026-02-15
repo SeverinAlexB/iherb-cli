@@ -1,3 +1,4 @@
+use crate::cli::SortOrder;
 use crate::error::IherbError;
 use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
@@ -37,7 +38,7 @@ impl Cache {
     pub fn get_search<T: DeserializeOwned>(
         &self,
         query: &str,
-        sort: &str,
+        sort: SortOrder,
         category: Option<&str>,
     ) -> Option<T> {
         if !self.read_enabled {
@@ -51,7 +52,7 @@ impl Cache {
     pub fn set_search<T: Serialize>(
         &self,
         query: &str,
-        sort: &str,
+        sort: SortOrder,
         category: Option<&str>,
         data: &T,
     ) -> Result<(), IherbError> {
@@ -60,10 +61,10 @@ impl Cache {
         self.write_cached(&path, data)
     }
 
-    fn search_key(&self, query: &str, sort: &str, category: Option<&str>) -> String {
+    fn search_key(&self, query: &str, sort: SortOrder, category: Option<&str>) -> String {
         let mut hasher = Sha256::new();
         hasher.update(query.as_bytes());
-        hasher.update(sort.as_bytes());
+        hasher.update(sort.as_cache_key().as_bytes());
         if let Some(cat) = category {
             hasher.update(cat.as_bytes());
         }

@@ -9,10 +9,8 @@ mod scraper;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use cli::{Cli, Commands};
+use cli::{Cli, Commands, Section, SortOrder};
 use config::AppConfig;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use crate::browser::session::BrowserSession;
 use crate::cache::Cache;
@@ -22,7 +20,6 @@ use crate::scraper::navigation::Navigator;
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Set up tracing
     let filter = if cli.debug {
         "iherb_cli=debug"
     } else {
@@ -36,7 +33,6 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
 
-    // Load config
     let config = AppConfig::load(
         cli.country,
         cli.currency,
@@ -45,16 +41,13 @@ async fn main() -> Result<()> {
         cli.debug,
     )?;
 
-    // Set up Ctrl+C handler
-    let browser_ref: Arc<Mutex<Option<BrowserSession>>> = Arc::new(Mutex::new(None));
-    let browser_cleanup = browser_ref.clone();
-    ctrlc::set_handler(move || {
+    ctrlc::set_handler(|| {
         eprintln!("\nInterrupted. Cleaning up...");
-        // We can't easily await here, so just exit.
-        // The browser process will be killed when our process exits.
         std::process::exit(130);
     })
     .context("Failed to set Ctrl+C handler")?;
+
+    let mut browser_session: Option<BrowserSession> = None;
 
     match cli.command {
         Commands::Search {
@@ -65,25 +58,23 @@ async fn main() -> Result<()> {
         } => {
             cmd_search(
                 &config,
-                &browser_ref,
+                &mut browser_session,
                 &query,
                 limit,
-                &sort,
+                sort,
                 category.as_deref(),
             )
             .await?;
         }
         Commands::Product { id_or_url, section } => {
-            if let Some(ref sec) = section {
-                validate_section(sec)?;
-            }
-            cmd_product(&config, &browser_ref, &id_or_url, section.as_deref()).await?;
+            cmd_product(&config, &mut browser_session, &id_or_url, section).await?;
         }
     }
 
-    // Clean up browser
-    if let Some(session) = browser_cleanup.lock().await.take() {
-        let _ = session.close().await;
+    if let Some(session) = browser_session.take() {
+        if let Err(e) = session.close().await {
+            tracing::warn!("Failed to close browser: {}", e);
+        }
     }
 
     Ok(())
@@ -91,15 +82,14 @@ async fn main() -> Result<()> {
 
 async fn cmd_search(
     config: &AppConfig,
-    browser_ref: &Arc<Mutex<Option<BrowserSession>>>,
+    browser_session: &mut Option<BrowserSession>,
     query: &str,
     limit: usize,
-    sort: &str,
+    sort: SortOrder,
     category: Option<&str>,
 ) -> Result<()> {
     let cache = Cache::new(config.cache_dir.clone(), config.no_cache);
 
-    // Check cache
     if let Some(cached) = cache.get_search::<model::SearchResult>(query, sort, category) {
         let mut result = cached;
         result.products.truncate(limit);
@@ -107,8 +97,7 @@ async fn cmd_search(
         return Ok(());
     }
 
-    // Launch browser
-    let session = get_or_launch_browser(config, browser_ref).await?;
+    let session = get_or_launch_browser(config, browser_session).await?;
     let page = session.new_page().await?;
     let navigator = Navigator::new(config.delay_ms);
 
@@ -160,8 +149,9 @@ async fn cmd_search(
         products: all_products,
     };
 
-    // Cache result
-    let _ = cache.set_search(query, sort, category, &result);
+    if let Err(e) = cache.set_search(query, sort, category, &result) {
+        tracing::debug!("Failed to cache search results: {}", e);
+    }
 
     print!("{}", output::format_search_results(&result));
     Ok(())
@@ -169,21 +159,19 @@ async fn cmd_search(
 
 async fn cmd_product(
     config: &AppConfig,
-    browser_ref: &Arc<Mutex<Option<BrowserSession>>>,
+    browser_session: &mut Option<BrowserSession>,
     id_or_url: &str,
-    section: Option<&str>,
+    section: Option<Section>,
 ) -> Result<()> {
     let product_id = parse_product_identifier(id_or_url)?;
     let cache = Cache::new(config.cache_dir.clone(), config.no_cache);
 
-    // Check cache
     if let Some(cached) = cache.get_product::<model::ProductDetail>(&product_id) {
         print!("{}", output::format_product_detail(&cached, section));
         return Ok(());
     }
 
-    // Launch browser
-    let session = get_or_launch_browser(config, browser_ref).await?;
+    let session = get_or_launch_browser(config, browser_session).await?;
     let page = session.new_page().await?;
     let navigator = Navigator::new(config.delay_ms);
 
@@ -195,8 +183,7 @@ async fn cmd_product(
         .await
         .context("Failed to navigate to product page")?;
 
-    // Check for 404
-    if html.contains("Page Not Found") || html.contains("404 Not Found") {
+    if scraper::helpers::is_not_found_page(&html) {
         anyhow::bail!("Product not found: {}", product_id);
     }
 
@@ -205,45 +192,38 @@ async fn cmd_product(
             .await
             .context("Failed to extract product data")?;
 
-    // Cache result
-    let _ = cache.set_product(&product_id, &product);
+    if let Err(e) = cache.set_product(&product_id, &product) {
+        tracing::debug!("Failed to cache product data: {}", e);
+    }
 
     print!("{}", output::format_product_detail(&product, section));
     Ok(())
 }
 
-async fn get_or_launch_browser(
+async fn get_or_launch_browser<'a>(
     config: &AppConfig,
-    browser_ref: &Arc<Mutex<Option<BrowserSession>>>,
-) -> Result<&'static BrowserSession> {
-    // We need the browser session to live for the duration of the command.
-    // Use a leaked reference approach for simplicity within a single CLI invocation.
-    let mut guard = browser_ref.lock().await;
-    if guard.is_none() {
+    session: &'a mut Option<BrowserSession>,
+) -> Result<&'a BrowserSession> {
+    if session.is_none() {
         let chrome_path =
             browser::resolve::resolve_chrome(config.browser_path.as_ref(), &config.data_dir)
                 .await
                 .context("Failed to resolve Chrome browser")?;
 
-        let session = BrowserSession::launch(chrome_path, config)
+        let launched = BrowserSession::launch(chrome_path, config)
             .await
             .context("Failed to launch browser")?;
 
-        *guard = Some(session);
+        *session = Some(launched);
     }
-    // Safety: session lives until main() cleanup. We leak a reference that's valid
-    // for the duration of this CLI invocation.
-    let session_ref = guard.as_ref().unwrap() as *const BrowserSession;
-    Ok(unsafe { &*session_ref })
+    Ok(session.as_ref().unwrap())
 }
 
 fn parse_product_identifier(input: &str) -> Result<String> {
-    // If it's a pure number, use it directly
     if input.chars().all(|c| c.is_ascii_digit()) && !input.is_empty() {
         return Ok(input.to_string());
     }
 
-    // Try to extract ID from URL (last numeric path segment)
     if input.contains("iherb.com") {
         if let Some(id) = input
             .split('/')
@@ -258,16 +238,4 @@ fn parse_product_identifier(input: &str) -> Result<String> {
         "Invalid product identifier: {}. Use a numeric ID or full iHerb URL",
         input
     );
-}
-
-fn validate_section(section: &str) -> Result<()> {
-    let valid = ["overview", "ingredients", "nutrition", "reviews"];
-    if valid.contains(&section) {
-        Ok(())
-    } else {
-        anyhow::bail!(
-            "Invalid section: {}. Valid sections: overview, ingredients, nutrition, reviews",
-            section
-        );
-    }
 }

@@ -4,6 +4,7 @@ use std::time::Duration;
 
 const MAX_CLOUDFLARE_RETRIES: u32 = 3;
 const CLOUDFLARE_WAIT_SECS: u64 = 12;
+const CLOUDFLARE_TITLE_MARKERS: &[&str] = &["Just a moment", "Attention Required"];
 
 pub struct Navigator {
     delay_ms: u64,
@@ -125,7 +126,9 @@ impl Navigator {
         match page.evaluate("document.title").await {
             Ok(val) => {
                 let title = val.into_value::<String>().unwrap_or_default();
-                title.contains("Just a moment") || title.contains("Attention Required")
+                CLOUDFLARE_TITLE_MARKERS
+                    .iter()
+                    .any(|marker| title.contains(marker))
             }
             Err(_) => false,
         }

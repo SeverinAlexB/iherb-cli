@@ -3,6 +3,11 @@ use crate::model::{Nutrient, ProductDetail, ReviewDistribution, SupplementFacts}
 use chromiumoxide::Page;
 use scraper::{Html, Selector};
 
+use super::helpers::{
+    debug_dump_html, detect_currency_from_html, extract_text, is_not_found_page, parse_price_str,
+    parse_review_count,
+};
+
 /// Extract product detail from a page, trying JSON-LD first, then JS globals, then DOM.
 pub async fn extract_product(
     page: &Page,
@@ -11,12 +16,7 @@ pub async fn extract_product(
     base_url: &str,
     currency: &str,
 ) -> Result<ProductDetail, IherbError> {
-    // Dump HTML for debugging
-    if tracing::enabled!(tracing::Level::DEBUG) {
-        let dump_path = format!("/tmp/iherb_product_{}.html", product_id);
-        let _ = std::fs::write(&dump_path, html);
-        tracing::debug!("Dumped HTML to {}", dump_path);
-    }
+    debug_dump_html(html, &format!("product_{}", product_id));
 
     // Try JSON-LD first (most reliable structured data)
     if let Some(json_ld) = super::extract::extract_json_ld(html) {
@@ -236,7 +236,6 @@ fn parse_from_js_globals(
 fn enrich_from_html(html: &str, product: &mut ProductDetail) {
     let doc = Html::parse_document(html);
 
-    // Brand - if not already set, try DOM
     if product.brand.is_empty() {
         if let Some(brand) = extract_text(
             &doc,
@@ -246,91 +245,74 @@ fn enrich_from_html(html: &str, product: &mut ProductDetail) {
         }
     }
 
-    // Original price from the share-email hidden input
-    if product.original_price.is_none() {
-        if let Ok(sel) = Selector::parse("input#share-email-model") {
-            if let Some(el) = doc.select(&sel).next() {
-                let list_price = el
-                    .value()
-                    .attr("data-list-price")
-                    .and_then(|s| parse_price_str(s));
-                let disc_price = el
-                    .value()
-                    .attr("data-discount-price")
-                    .and_then(|s| parse_price_str(s));
-                if let (Some(list), Some(disc)) = (list_price, disc_price) {
-                    if list > disc {
-                        product.original_price = Some(list);
-                        // Update price to discount price if we got it from JSON-LD as list price
-                        if (product.price - list).abs() < 0.01 {
-                            product.price = disc;
-                        }
-                    }
-                }
-            }
-        }
-    }
+    enrich_pricing(&doc, product);
+    enrich_rating_and_reviews(&doc, product);
 
-    // Rating from star link title (e.g., "4.8/5 - 42,328 Reviews")
-    if product.rating.is_none() {
-        if let Ok(sel) = Selector::parse("a.stars.scroll-to, a.stars") {
-            if let Some(el) = doc.select(&sel).next() {
-                if let Some(title) = el.value().attr("title") {
-                    if let Some(rating) = title
-                        .split('/')
-                        .next()
-                        .and_then(|s| s.trim().parse::<f64>().ok())
-                    {
-                        product.rating = Some(rating);
-                    }
-                }
-            }
-        }
-    }
-
-    // Review count
-    if product.review_count.is_none() {
-        if let Some(text) = extract_text(&doc, "a.rating-count span") {
-            let num: String = text
-                .replace(',', "")
-                .chars()
-                .filter(|c| c.is_ascii_digit())
-                .collect();
-            product.review_count = num.parse::<u32>().ok();
-        }
-    }
-
-    // Availability
     if let Some(stock_text) = extract_text(&doc, "#stock-status .stock-status-content strong") {
         product.in_stock = stock_text.to_lowercase().contains("in stock");
     }
 
-    // Shipping weight from product specs
-    if product.shipping_weight.is_none() {
-        product.shipping_weight = extract_spec(&doc, "Shipping Weight");
-    }
-
-    // Product code from specs if not set
-    if product.product_code.is_none() {
-        product.product_code = extract_spec(&doc, "Product Code");
-    }
-
-    // UPC from specs if not set
-    if product.upc.is_none() {
-        product.upc = extract_spec(&doc, "UPC");
-    }
-
-    // Parse the product overview section for structured content
+    enrich_product_specs(&doc, product);
     parse_overview_sections(html, product);
 
-    // Supplement facts
     if product.supplement_facts.is_none() {
         product.supplement_facts = parse_supplement_facts_html(&doc);
     }
-
-    // Review distribution from DOM
     if product.review_distribution.is_none() {
         product.review_distribution = parse_review_distribution_html(&doc);
+    }
+}
+
+fn enrich_pricing(doc: &Html, product: &mut ProductDetail) {
+    if product.original_price.is_some() {
+        return;
+    }
+    let sel = match Selector::parse("input#share-email-model") {
+        Ok(sel) => sel,
+        Err(_) => return,
+    };
+    let el = match doc.select(&sel).next() {
+        Some(el) => el,
+        None => return,
+    };
+    let list_price = el
+        .value()
+        .attr("data-list-price")
+        .and_then(parse_price_str);
+    let disc_price = el
+        .value()
+        .attr("data-discount-price")
+        .and_then(parse_price_str);
+    if let (Some(list), Some(disc)) = (list_price, disc_price) {
+        if list > disc {
+            product.original_price = Some(list);
+            if (product.price - list).abs() < 0.01 {
+                product.price = disc;
+            }
+        }
+    }
+}
+
+fn enrich_rating_and_reviews(doc: &Html, product: &mut ProductDetail) {
+    if product.rating.is_none() {
+        product.rating = extract_rating_from_stars(doc);
+    }
+    if product.review_count.is_none() {
+        if let Some(text) = extract_text(doc, "a.rating-count span") {
+            product.review_count = parse_review_count(&text);
+        }
+    }
+}
+
+fn enrich_product_specs(doc: &Html, product: &mut ProductDetail) {
+    if product.shipping_weight.is_none() {
+        product.shipping_weight = extract_spec(doc, "Shipping Weight");
+    }
+    if product.product_code.is_none() {
+        product.product_code = extract_spec(doc, "Product Code");
+    }
+    if product.upc.is_none() {
+        product.upc = extract_spec(doc, "UPC");
     }
 }
 
@@ -338,61 +320,64 @@ fn enrich_from_html(html: &str, product: &mut ProductDetail) {
 fn parse_overview_sections(html: &str, product: &mut ProductDetail) {
     let doc = Html::parse_document(html);
 
-    // Ingredients from .prodOverviewIngred
     if product.ingredients.is_none() {
         if let Some(text) = extract_text(&doc, ".prodOverviewIngred") {
             product.ingredients = Some(text);
         }
     }
 
-    // Parse sections by heading text in product overview
-    // Each section is: <h3><strong>Section Title</strong></h3> followed by <div class="prodOverviewDetail">content</div>
-    if let Ok(h3_sel) = Selector::parse("#product-overview h3") {
-        for h3 in doc.select(&h3_sel) {
-            let heading_text: String = h3.text().collect::<Vec<_>>().join("").trim().to_lowercase();
+    let h3_sel = match Selector::parse("#product-overview h3") {
+        Ok(sel) => sel,
+        Err(_) => return,
+    };
 
-            // Get the next sibling div content
-            let mut next = h3.next_sibling();
-            while let Some(node) = next {
-                if let Some(el) = node.value().as_element() {
-                    if el.name() == "div" {
-                        let inner_html: String = node
-                            .children()
-                            .filter_map(|child| {
-                                if let Some(text) = child.value().as_text() {
-                                    Some(text.to_string())
-                                } else if child.value().is_element() {
-                                    let el_ref = scraper::ElementRef::wrap(child)?;
-                                    Some(el_ref.text().collect::<Vec<_>>().join(" "))
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                            .trim()
-                            .to_string();
+    for h3 in doc.select(&h3_sel) {
+        let heading: String = h3.text().collect::<Vec<_>>().join("").trim().to_lowercase();
+        let content = match extract_sibling_div_text(&h3) {
+            Some(text) if !text.is_empty() => text,
+            _ => continue,
+        };
+        assign_section_by_heading(&heading, content, product);
+    }
+}
 
-                        if !inner_html.is_empty() {
-                            if heading_text.contains("suggested use")
-                                && product.suggested_use.is_none()
-                            {
-                                product.suggested_use = Some(inner_html);
-                            } else if heading_text.contains("warning") && product.warnings.is_none()
-                            {
-                                product.warnings = Some(inner_html);
-                            } else if heading_text.contains("description")
-                                && product.description.is_none()
-                            {
-                                product.description = Some(inner_html);
-                            }
+/// Extract text content from the first sibling `<div>` after a heading element.
+fn extract_sibling_div_text(heading: &scraper::ElementRef) -> Option<String> {
+    let mut next = heading.next_sibling();
+    while let Some(node) = next {
+        if let Some(el) = node.value().as_element() {
+            if el.name() == "div" {
+                let text: String = node
+                    .children()
+                    .filter_map(|child| {
+                        if let Some(text) = child.value().as_text() {
+                            Some(text.to_string())
+                        } else if child.value().is_element() {
+                            let el_ref = scraper::ElementRef::wrap(child)?;
+                            Some(el_ref.text().collect::<Vec<_>>().join(" "))
+                        } else {
+                            None
                         }
-                        break;
-                    }
-                }
-                next = node.next_sibling();
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .trim()
+                    .to_string();
+                return Some(text);
             }
         }
+        next = node.next_sibling();
+    }
+    None
+}
+
+fn assign_section_by_heading(heading: &str, content: String, product: &mut ProductDetail) {
+    if heading.contains("suggested use") && product.suggested_use.is_none() {
+        product.suggested_use = Some(content);
+    } else if heading.contains("warning") && product.warnings.is_none() {
+        product.warnings = Some(content);
+    } else if heading.contains("description") && product.description.is_none() {
+        product.description = Some(content);
     }
 }
 
@@ -404,9 +389,8 @@ fn extract_spec(doc: &Html, label: &str) -> Option<String> {
             if text.starts_with(label) {
                 // Extract the value after the label and colon
                 let value = text
-                    .splitn(2, ':')
-                    .nth(1)
-                    .map(|s| s.trim().to_string())
+                    .split_once(':')
+                    .map(|(_, v)| v.trim().to_string())
                     .filter(|s| !s.is_empty());
                 if value.is_some() {
                     return value;
@@ -558,11 +542,7 @@ pub fn parse_from_html(
 ) -> Result<ProductDetail, IherbError> {
     let doc = Html::parse_document(html);
 
-    // Check for 404
-    if html.contains("Page Not Found")
-        || html.contains("<title>404</title>")
-        || html.contains("404 Not Found")
-    {
+    if is_not_found_page(html) {
         return Err(IherbError::ProductNotFound(product_id.to_string()));
     }
 
@@ -590,14 +570,8 @@ pub fn parse_from_html(
     let rating = extract_rating_from_stars(&doc);
 
     // Review count
-    let review_count = extract_text(&doc, "a.rating-count span").and_then(|s| {
-        s.replace(',', "")
-            .chars()
-            .filter(|c| c.is_ascii_digit())
-            .collect::<String>()
-            .parse::<u32>()
-            .ok()
-    });
+    let review_count =
+        extract_text(&doc, "a.rating-count span").and_then(|s| parse_review_count(&s));
 
     // Availability
     let in_stock = extract_text(&doc, "#stock-status .stock-status-content strong")
@@ -613,7 +587,7 @@ pub fn parse_from_html(
 
     // Detect actual currency from the page, falling back to config currency
     let detected_currency =
-        super::search::detect_currency_from_html(&doc).unwrap_or_else(|| currency.to_string());
+        detect_currency_from_html(&doc).unwrap_or_else(|| currency.to_string());
 
     let product_url = format!("{}/pr/p/{}", base_url, product_id);
 
@@ -650,14 +624,11 @@ fn extract_prices_from_input(doc: &Html) -> Option<(f64, Option<f64>)> {
     let sel = Selector::parse("input#share-email-model").ok()?;
     let el = doc.select(&sel).next()?;
 
-    let list_price = el
-        .value()
-        .attr("data-list-price")
-        .and_then(|s| parse_price_str(s));
+    let list_price = el.value().attr("data-list-price").and_then(parse_price_str);
     let disc_price = el
         .value()
         .attr("data-discount-price")
-        .and_then(|s| parse_price_str(s));
+        .and_then(parse_price_str);
 
     match (disc_price, list_price) {
         (Some(disc), Some(list)) if list > disc => Some((disc, Some(list))),
@@ -673,34 +644,6 @@ fn extract_rating_from_stars(doc: &Html) -> Option<f64> {
     let title = el.value().attr("title")?;
     // Title format: "4.8/5 - 42,328 Reviews"
     title.split('/').next()?.trim().parse::<f64>().ok()
-}
-
-fn extract_text(doc: &Html, selectors: &str) -> Option<String> {
-    for selector_str in selectors.split(',') {
-        let selector_str = selector_str.trim();
-        if let Ok(selector) = Selector::parse(selector_str) {
-            if let Some(element) = doc.select(&selector).next() {
-                let text: String = element
-                    .text()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .trim()
-                    .to_string();
-                if !text.is_empty() {
-                    return Some(text);
-                }
-            }
-        }
-    }
-    None
-}
-
-fn parse_price_str(s: &str) -> Option<f64> {
-    let cleaned: String = s
-        .chars()
-        .filter(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    cleaned.parse().ok()
 }
 
 fn parse_supplement_facts_html(doc: &Html) -> Option<SupplementFacts> {
@@ -726,9 +669,9 @@ fn parse_supplement_facts_html(doc: &Html) -> Option<SupplementFacts> {
             let text = &cells[0];
             let lower = text.to_lowercase();
             if lower.contains("serving size") {
-                serving_size = text.splitn(2, ':').nth(1).map(|s| s.trim().to_string());
+                serving_size = text.split_once(':').map(|(_, v)| v.trim().to_string());
             } else if lower.contains("servings per") {
-                servings_per_container = text.splitn(2, ':').nth(1).map(|s| s.trim().to_string());
+                servings_per_container = text.split_once(':').map(|(_, v)| v.trim().to_string());
             }
             continue;
         }

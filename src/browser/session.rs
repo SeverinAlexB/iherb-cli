@@ -7,6 +7,25 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+const STEALTH_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+const STEALTH_ARGS: &[&str] = &[
+    "--disable-blink-features=AutomationControlled",
+    "--disable-features=IsolateOrigins,site-per-process",
+    "--disable-site-isolation-trials",
+    "--disable-web-security",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-default-apps",
+    "--disable-extensions",
+    "--disable-popup-blocking",
+    "--disable-translate",
+    "--disable-background-timer-throttling",
+    "--disable-renderer-backgrounding",
+    "--disable-backgrounding-occluded-windows",
+    "--window-size=1920,1080",
+];
+
 pub struct BrowserSession {
     browser: Arc<Mutex<Browser>>,
     _handle: tokio::task::JoinHandle<()>,
@@ -36,22 +55,12 @@ impl BrowserSession {
         let mut builder = BrowserConfig::builder()
             .chrome_executable(chrome_path)
             .user_data_dir(user_data_dir.clone())
-            .arg("--disable-blink-features=AutomationControlled")
-            .arg("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-            .arg("--disable-features=IsolateOrigins,site-per-process")
-            .arg("--disable-site-isolation-trials")
-            .arg("--disable-web-security")
-            .arg("--no-first-run")
-            .arg("--no-default-browser-check")
-            .arg("--disable-default-apps")
-            .arg("--disable-extensions")
-            .arg("--disable-popup-blocking")
-            .arg("--disable-translate")
-            .arg("--disable-background-timer-throttling")
-            .arg("--disable-renderer-backgrounding")
-            .arg("--disable-backgrounding-occluded-windows")
-            .arg("--window-size=1920,1080")
+            .arg(format!("--user-agent={}", STEALTH_USER_AGENT))
             .viewport(None);
+
+        for arg in STEALTH_ARGS {
+            builder = builder.arg(*arg);
+        }
 
         if !config.debug {
             builder = builder.arg("--headless=new");

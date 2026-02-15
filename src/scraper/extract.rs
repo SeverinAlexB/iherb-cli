@@ -10,32 +10,7 @@ pub async fn extract_next_data(page: &Page) -> Result<Option<serde_json::Value>,
             return null;
         })()
     "#;
-
-    match page.evaluate(script).await {
-        Ok(val) => {
-            let text = val.into_value::<Option<String>>().unwrap_or(None);
-            match text {
-                Some(json_str) if !json_str.is_empty() => {
-                    tracing::debug!("Found __NEXT_DATA__ ({} bytes)", json_str.len());
-                    match serde_json::from_str(&json_str) {
-                        Ok(parsed) => Ok(Some(parsed)),
-                        Err(e) => {
-                            tracing::warn!("Failed to parse __NEXT_DATA__: {}", e);
-                            Ok(None)
-                        }
-                    }
-                }
-                _ => {
-                    tracing::debug!("No __NEXT_DATA__ found on page");
-                    Ok(None)
-                }
-            }
-        }
-        Err(e) => {
-            tracing::warn!("Failed to evaluate __NEXT_DATA__ script: {}", e);
-            Ok(None)
-        }
-    }
+    evaluate_and_parse_json(page, script, "__NEXT_DATA__").await
 }
 
 /// Extract JSON-LD structured data from the page.
@@ -46,12 +21,10 @@ pub fn extract_json_ld(html: &str) -> Option<serde_json::Value> {
     for el in doc.select(&sel) {
         let text: String = el.text().collect();
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
-            // Look for Product type
             if parsed.get("@type").and_then(|v| v.as_str()) == Some("Product") {
                 tracing::debug!("Found JSON-LD Product data");
                 return Some(parsed);
             }
-            // Could be an array
             if let Some(arr) = parsed.as_array() {
                 for item in arr {
                     if item.get("@type").and_then(|v| v.as_str()) == Some("Product") {
@@ -76,29 +49,37 @@ pub async fn extract_js_globals(page: &Page) -> Result<Option<serde_json::Value>
             return Object.keys(result).length > 0 ? JSON.stringify(result) : null;
         })()
     "#;
+    evaluate_and_parse_json(page, script, "JS globals").await
+}
 
+/// Evaluate a JS script on the page and parse the result as JSON.
+async fn evaluate_and_parse_json(
+    page: &Page,
+    script: &str,
+    label: &str,
+) -> Result<Option<serde_json::Value>, IherbError> {
     match page.evaluate(script).await {
         Ok(val) => {
             let text = val.into_value::<Option<String>>().unwrap_or(None);
             match text {
                 Some(json_str) if !json_str.is_empty() => {
-                    tracing::debug!("Found JS globals ({} bytes)", json_str.len());
+                    tracing::debug!("Found {} ({} bytes)", label, json_str.len());
                     match serde_json::from_str(&json_str) {
                         Ok(parsed) => Ok(Some(parsed)),
                         Err(e) => {
-                            tracing::warn!("Failed to parse JS globals: {}", e);
+                            tracing::warn!("Failed to parse {}: {}", label, e);
                             Ok(None)
                         }
                     }
                 }
                 _ => {
-                    tracing::debug!("No JS globals found");
+                    tracing::debug!("No {} found", label);
                     Ok(None)
                 }
             }
         }
         Err(e) => {
-            tracing::warn!("Failed to evaluate JS globals script: {}", e);
+            tracing::warn!("Failed to evaluate {} script: {}", label, e);
             Ok(None)
         }
     }

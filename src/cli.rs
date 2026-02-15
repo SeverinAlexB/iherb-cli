@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(
@@ -43,8 +43,8 @@ pub enum Commands {
         limit: usize,
 
         /// Sort order: relevance, price-asc, price-desc, rating, best-selling
-        #[arg(long, default_value = "relevance")]
-        sort: String,
+        #[arg(long, value_enum, default_value_t = SortOrder::Relevance)]
+        sort: SortOrder,
 
         /// Filter by category (e.g., supplements, vitamins, protein)
         #[arg(long)]
@@ -56,8 +56,66 @@ pub enum Commands {
         /// Numeric product ID or full iHerb product URL
         id_or_url: String,
 
-        /// Only show a specific section: overview, ingredients, nutrition, reviews
-        #[arg(long)]
-        section: Option<String>,
+        /// Only show a specific section: overview, description, ingredients, nutrition, suggested-use, warnings, reviews
+        #[arg(long, value_enum)]
+        section: Option<Section>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SortOrder {
+    Relevance,
+    #[value(name = "price-asc")]
+    PriceAsc,
+    #[value(name = "price-desc")]
+    PriceDesc,
+    Rating,
+    #[value(name = "best-selling")]
+    BestSelling,
+}
+
+impl SortOrder {
+    pub fn as_url_param(self) -> &'static str {
+        match self {
+            SortOrder::Relevance => "",
+            SortOrder::PriceAsc => "&sr=4",
+            SortOrder::PriceDesc => "&sr=3",
+            SortOrder::Rating => "&sr=1",
+            SortOrder::BestSelling => "&sr=2",
+        }
+    }
+
+    pub fn as_cache_key(self) -> &'static str {
+        match self {
+            SortOrder::Relevance => "relevance",
+            SortOrder::PriceAsc => "price-asc",
+            SortOrder::PriceDesc => "price-desc",
+            SortOrder::Rating => "rating",
+            SortOrder::BestSelling => "best-selling",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Section {
+    Overview,
+    Description,
+    Nutrition,
+    Ingredients,
+    #[value(name = "suggested-use")]
+    SuggestedUse,
+    Warnings,
+    Reviews,
+}
+
+impl Section {
+    pub const ALL: &[Section] = &[
+        Section::Overview,
+        Section::Description,
+        Section::Nutrition,
+        Section::Ingredients,
+        Section::SuggestedUse,
+        Section::Warnings,
+        Section::Reviews,
+    ];
 }
