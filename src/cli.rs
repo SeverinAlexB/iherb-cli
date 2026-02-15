@@ -38,8 +38,8 @@ pub enum Commands {
         /// Search term (e.g., "vitamin c", "omega 3")
         query: String,
 
-        /// Max number of results to return (default: 10)
-        #[arg(long, default_value = "10")]
+        /// Max number of results to return (default: 20)
+        #[arg(long, default_value = "20")]
         limit: usize,
 
         /// Sort order: relevance, price-asc, price-desc, rating, best-selling

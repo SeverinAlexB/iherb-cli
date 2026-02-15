@@ -1,0 +1,21 @@
+{
+  "name": "iherb-cli-skills",
+  "owner": {
+    "name": "SeverinAlexB"
+  },
+  "metadata": {
+    "description": "Skills for querying supplement and health product data from iHerb",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "iherb-agent",
+      "description": "Use iherb-cli to search for supplements, compare products, check ingredients, and get pricing from iHerb",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/iherb-agent"
+      ]
+    }
+  ]
+}

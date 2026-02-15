@@ -11,7 +11,7 @@ iHerb has no official API. This CLI uses a headless browser to load pages (bypas
 Requires [Rust](https://www.rust-lang.org/tools/install) (1.70+).
 
 ```bash
-git clone https://github.com/your-username/iherb-cli.git
+git clone https://github.com/SeverinAlexB/iherb-cli.git
 cd iherb-cli
 cargo build --release
 ```
@@ -36,7 +36,7 @@ iherb-cli <command> [options] [arguments]
 
 ```bash
 iherb-cli search "vitamin c"
-iherb-cli search "omega 3" --limit 5 --sort price-asc
+iherb-cli search "omega 3" --limit 20 --sort price-asc
 iherb-cli search "protein" --category supplements --sort best-selling
 ```
 
@@ -44,7 +44,7 @@ iherb-cli search "protein" --category supplements --sort best-selling
 
 | Flag | Description | Default |
 |---|---|---|
-| `--limit <n>` | Max results to return (paginates automatically) | 10 |
+| `--limit <n>` | Max results to return (paginates automatically) | 20 |
 | `--sort <method>` | `relevance`, `price-asc`, `price-desc`, `rating`, `best-selling` | `relevance` |
 | `--category <slug>` | Filter by category (e.g., `supplements`, `vitamins`) | — |
 
@@ -173,6 +173,36 @@ iHerb uses Cloudflare anti-bot protection, so simple HTTP requests are blocked. 
 4. **DOM scraping** — CSS selector-based extraction as a last resort
 
 This layered approach keeps the tool working even when iHerb changes their page structure.
+
+## Claude Code skill
+
+This repo includes a [Claude Code skill](https://code.claude.com/docs/en/skills) that teaches AI agents how to use `iherb-cli` for supplement research. With the skill installed, Claude can autonomously search for products, compare ingredients, and make recommendations.
+
+### Install the skill
+
+```bash
+/install-plugin iherb-agent@SeverinAlexB/iherb-cli
+```
+
+### What the agent can do
+
+Once installed, Claude can handle requests like:
+
+- *"What's the best-rated vitamin D3 on iHerb?"*
+- *"Compare the top 3 magnesium glycinate supplements by price and dosage"*
+- *"What are the ingredients in iHerb product 61864?"*
+- *"Find me a budget omega-3 supplement with good reviews"*
+
+The skill guides Claude through multi-step workflows — searching, fetching details, comparing nutrition facts, and recommending products with reasoning.
+
+### Requirements
+
+The `iherb-cli` binary must be available on `PATH`. Build it first:
+
+```bash
+cargo build --release
+export PATH="$PATH:$(pwd)/target/release"
+```
 
 ## Architecture
 

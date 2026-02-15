@@ -51,7 +51,7 @@ ons]
 **Options:**
 | Flag | Description |
 |---|---|
-| `--limit <n>` | Max number of results to return (default: 10). Automatically paginates behind the scenes if needed. |
+| `--limit <n>` | Max number of results to return (default: 20). Automatically paginates behind the scenes if needed. |
 | `--sort <method>` | Sort order: `relevance` (default), `price-asc`, `price-desc`, `rating`, `best-selling` |
 | `--category <slug>` | Filter by category (e.g., `supplements`, `vitamins`, `protein`) |
 
