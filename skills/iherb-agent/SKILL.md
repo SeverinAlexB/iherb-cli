@@ -72,10 +72,12 @@ Calculate price-per-serving: price / servings_per_container.
 Use `--section` to fetch only what's needed:
 
 ```bash
-iherb-cli product 61864 --section ingredients   # what's in it
-iherb-cli product 61864 --section nutrition      # supplement facts table
+iherb-cli product 61864 --section ingredients   # supplement facts + other ingredients
+iherb-cli product 61864 --section nutrition      # supplement facts table only
 iherb-cli product 61864 --section reviews        # rating breakdown
 ```
+
+Note: `--section ingredients` returns both the supplement facts (active ingredients with amounts) and the other/inactive ingredients — everything you need in one call.
 
 ### Find budget options
 

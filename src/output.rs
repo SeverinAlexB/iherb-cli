@@ -62,7 +62,15 @@ pub fn format_product_detail(product: &ProductDetail, section: Option<Section>) 
             Section::Overview => format_overview(product, &mut out),
             Section::Description => format_description(product, &mut out),
             Section::Nutrition => format_nutrition(product, &mut out),
-            Section::Ingredients => format_ingredients(product, &mut out),
+            Section::Ingredients => {
+                // When explicitly requesting ingredients, show supplement facts
+                // first (active ingredients) then other ingredients — matching
+                // how supplement labels read and what users expect from "what's in it?"
+                if section.is_some() {
+                    format_nutrition(product, &mut out);
+                }
+                format_ingredients(product, &mut out);
+            }
             Section::SuggestedUse => format_suggested_use(product, &mut out),
             Section::Warnings => format_warnings(product, &mut out),
             Section::Reviews => format_reviews(product, &mut out),
