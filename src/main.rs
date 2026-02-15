@@ -192,6 +192,16 @@ async fn cmd_product(
             .await
             .context("Failed to extract product data")?;
 
+    // Validate the extracted product to catch nonexistent product pages that slip
+    // through extraction (e.g., iHerb returns a page that doesn't trigger 404 detection
+    // but has no real product data).
+    if product.name.is_empty()
+        || product.name == "Unknown Product"
+        || (product.price == 0.0 && product.rating.is_none() && product.review_count.is_none())
+    {
+        anyhow::bail!("Product not found: {}", product_id);
+    }
+
     if let Err(e) = cache.set_product(&product_id, &product) {
         tracing::debug!("Failed to cache product data: {}", e);
     }

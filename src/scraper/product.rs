@@ -62,6 +62,78 @@ pub async fn extract_product(
     parse_from_html(html, product_id, base_url, currency)
 }
 
+/// Extract price, original price, and currency from JSON-LD offers.
+/// Handles both top-level `price`/`priceCurrency` and the `priceSpecification` array.
+fn extract_prices_from_offers(offers: Option<&serde_json::Value>) -> (f64, Option<f64>, String) {
+    let offers = match offers {
+        Some(o) => o,
+        None => return (0.0, None, "USD".to_string()),
+    };
+
+    // Try top-level offers.price
+    let top_price = offers
+        .get("price")
+        .and_then(|v| {
+            v.as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+                .or_else(|| v.as_f64())
+        });
+    let top_currency = offers
+        .get("priceCurrency")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    if let Some(price) = top_price {
+        return (price, None, top_currency.unwrap_or_else(|| "USD".to_string()));
+    }
+
+    // Fall back to priceSpecification array
+    if let Some(specs) = offers.get("priceSpecification").and_then(|v| v.as_array()) {
+        let mut current_price = None;
+        let mut strikethrough_price = None;
+        let mut currency = None;
+
+        for spec in specs {
+            let spec_price = spec
+                .get("price")
+                .and_then(|v| {
+                    v.as_str()
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .or_else(|| v.as_f64())
+                });
+            let spec_currency = spec
+                .get("priceCurrency")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            let is_strikethrough = spec
+                .get("priceType")
+                .and_then(|v| v.as_str())
+                .map(|s| s.contains("StrikethroughPrice"))
+                .unwrap_or(false);
+
+            if is_strikethrough {
+                strikethrough_price = spec_price;
+            } else {
+                current_price = spec_price;
+                if currency.is_none() {
+                    currency = spec_currency;
+                }
+            }
+        }
+
+        let price = current_price.unwrap_or(0.0);
+        let original = strikethrough_price.filter(|&op| op > price);
+        let currency = currency
+            .or(top_currency)
+            .unwrap_or_else(|| "USD".to_string());
+
+        return (price, original, currency);
+    }
+
+    (0.0, None, top_currency.unwrap_or_else(|| "USD".to_string()))
+}
+
 /// Parse product from JSON-LD structured data.
 fn parse_from_json_ld(
     data: &serde_json::Value,
@@ -85,20 +157,9 @@ fn parse_from_json_ld(
         .to_string();
 
     let offers = data.get("offers");
-    let price = offers
-        .and_then(|o| o.get("price"))
-        .and_then(|v| {
-            v.as_str()
-                .and_then(|s| s.parse::<f64>().ok())
-                .or_else(|| v.as_f64())
-        })
-        .unwrap_or(0.0);
 
-    let currency = offers
-        .and_then(|o| o.get("priceCurrency"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("USD")
-        .to_string();
+    // Try top-level offers.price first, then fall back to priceSpecification
+    let (price, original_price, currency) = extract_prices_from_offers(offers);
 
     let in_stock = offers
         .and_then(|o| o.get("availability"))
@@ -149,7 +210,7 @@ fn parse_from_json_ld(
         name,
         brand,
         price,
-        original_price: None, // JSON-LD typically only has current price
+        original_price,
         currency,
         rating,
         review_count,
@@ -264,7 +325,7 @@ fn enrich_from_html(html: &str, product: &mut ProductDetail) {
 }
 
 fn enrich_pricing(doc: &Html, product: &mut ProductDetail) {
-    if product.original_price.is_some() {
+    if product.original_price.is_some() && product.price > 0.0 {
         return;
     }
     let sel = match Selector::parse("input#share-email-model") {
@@ -286,7 +347,7 @@ fn enrich_pricing(doc: &Html, product: &mut ProductDetail) {
     if let (Some(list), Some(disc)) = (list_price, disc_price) {
         if list > disc {
             product.original_price = Some(list);
-            if (product.price - list).abs() < 0.01 {
+            if (product.price - list).abs() < 0.01 || product.price == 0.0 {
                 product.price = disc;
             }
         }
@@ -547,7 +608,12 @@ pub fn parse_from_html(
     }
 
     let name = extract_text(&doc, "h1#name, h1[data-testid='product-name'], h1")
-        .unwrap_or_else(|| "Unknown Product".to_string());
+        .unwrap_or_default();
+
+    // If we couldn't extract a meaningful product name, this is not a valid product page
+    if name.is_empty() || name == "Unknown Product" {
+        return Err(IherbError::ProductNotFound(product_id.to_string()));
+    }
 
     let brand = extract_text(
         &doc,
@@ -711,29 +777,83 @@ fn parse_supplement_facts_html(doc: &Html) -> Option<SupplementFacts> {
 }
 
 fn parse_review_distribution_html(doc: &Html) -> Option<ReviewDistribution> {
-    // Try to find review summary section
-    let sel = Selector::parse("#product-reviews .review-summary, .rating-distribution, [data-testid='rating-distribution']").ok()?;
-    let _el = doc.select(&sel).next()?;
+    // iHerb uses a <ugc-review-progress-bar> custom element containing
+    // a <button class="item"> for each star level (5 down to 1).
+    // Each button has:
+    //   - a <span> with text like "5 stars"
+    //   - a <span> with style="width: XX%;" showing the bar fill
+    //   - a <span class="... each-count"> with the raw review count
+    // We extract the bar width percentage for each star level.
+    let container_sel =
+        Selector::parse("ugc-review-progress-bar, .ugc-review-progress-wrap").ok()?;
+    let container = doc.select(&container_sel).next()?;
 
-    fn get_star_pct(doc: &Html, star: u8) -> Option<f64> {
-        let sel_str = format!(
-            "[data-testid='star-{}-pct'], .star-{}-pct, .star-percent-{}",
-            star, star, star
-        );
-        if let Ok(sel) = Selector::parse(&sel_str) {
-            if let Some(el) = doc.select(&sel).next() {
-                let text: String = el.text().collect::<Vec<_>>().join("");
-                return text.replace('%', "").trim().parse::<f64>().ok();
+    let button_sel = Selector::parse("button.item").ok()?;
+    let buttons: Vec<_> = container.select(&button_sel).collect();
+    if buttons.is_empty() {
+        return None;
+    }
+
+    let mut star_pcts: [Option<f64>; 5] = [None; 5]; // index 0 = 5-star, 4 = 1-star
+
+    for button in &buttons {
+        // Find which star level this button represents
+        let button_text: String = button.text().collect::<Vec<_>>().join(" ");
+        let star_level: Option<usize> = button_text
+            .split_whitespace()
+            .zip(button_text.split_whitespace().skip(1))
+            .find(|(_, second)| second.starts_with("star"))
+            .and_then(|(num, _)| num.parse::<usize>().ok())
+            .filter(|&n| (1..=5).contains(&n));
+
+        let star_level = match star_level {
+            Some(n) => n,
+            None => continue,
+        };
+
+        // Extract the bar width percentage from the inner <span> style attribute.
+        // The bar is: <span class="block h-full bg-green-dark" style="width: 84%;"></span>
+        // inside a <div class="percent-wrap ...">
+        if let Ok(span_sel) = Selector::parse(".percent-wrap span, span.block") {
+            for span in button.select(&span_sel) {
+                if let Some(style) = span.value().attr("style") {
+                    if let Some(pct) = parse_width_percent(style) {
+                        star_pcts[5 - star_level] = Some(pct);
+                        break;
+                    }
+                }
             }
         }
-        None
+    }
+
+    // Only return if we found at least one star level
+    if star_pcts.iter().all(|p| p.is_none()) {
+        return None;
     }
 
     Some(ReviewDistribution {
-        five_star: get_star_pct(doc, 5),
-        four_star: get_star_pct(doc, 4),
-        three_star: get_star_pct(doc, 3),
-        two_star: get_star_pct(doc, 2),
-        one_star: get_star_pct(doc, 1),
+        five_star: star_pcts[0],
+        four_star: star_pcts[1],
+        three_star: star_pcts[2],
+        two_star: star_pcts[3],
+        one_star: star_pcts[4],
     })
+}
+
+/// Parse a percentage value from a CSS width style like "width: 84%;".
+fn parse_width_percent(style: &str) -> Option<f64> {
+    style
+        .split(';')
+        .filter_map(|prop| {
+            let prop = prop.trim();
+            if prop.starts_with("width") {
+                prop.split(':')
+                    .nth(1)
+                    .and_then(|v| v.trim().strip_suffix('%'))
+                    .and_then(|v| v.trim().parse::<f64>().ok())
+            } else {
+                None
+            }
+        })
+        .next()
 }

@@ -10,11 +10,11 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
 
-    /// Country code for localized pricing/availability (e.g., us, ch, de)
+    /// Country subdomain to use (e.g., us, ch, de). Note: iHerb may override based on your IP
     #[arg(long, global = true)]
     pub country: Option<String>,
 
-    /// Currency code (e.g., USD, CHF, EUR)
+    /// Fallback currency label when auto-detection fails (e.g., USD, CHF, EUR)
     #[arg(long, global = true)]
     pub currency: Option<String>,
 
