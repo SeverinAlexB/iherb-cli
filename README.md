@@ -6,6 +6,12 @@ iHerb has no official API. This CLI uses a headless browser to load pages (bypas
 
 ## Installation
 
+```bash
+curl -fsSL https://raw.githubusercontent.com/SeverinAlexB/iherb-cli/master/install.sh | bash
+```
+
+This downloads the latest release binary for your platform and installs it to `/usr/local/bin`. Run the same command again to update.
+
 ### Build from source
 
 Requires [Rust](https://www.rust-lang.org/tools/install) (1.70+).
