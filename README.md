@@ -152,7 +152,10 @@ currency = "CHF"
 
 ## Caching
 
-Scraped data is cached locally to `~/.cache/iherb-cli/` to reduce redundant requests.
+Scraped data is cached locally to reduce redundant requests. The cache directory is platform-dependent:
+
+- **macOS:** `~/Library/Caches/iherb-cli/`
+- **Linux:** `~/.cache/iherb-cli/`
 
 All cached data expires after **30 days**.
 
