@@ -210,45 +210,6 @@ cargo build --release
 export PATH="$PATH:$(pwd)/target/release"
 ```
 
-## Architecture
-
-```
-src/
-├── main.rs              # Entry point, command orchestration
-├── cli.rs               # Argument parsing (clap)
-├── model.rs             # Data structures (ProductSummary, ProductDetail)
-├── error.rs             # Error types
-├── config.rs            # Configuration loading
-├── cache.rs             # File-based JSON caching
-├── output.rs            # Markdown formatting
-├── browser/
-│   ├── session.rs       # Browser lifecycle & stealth mode
-│   ├── resolve.rs       # Chrome binary detection
-│   └── download.rs      # Chrome for Testing auto-download
-└── scraper/
-    ├── navigation.rs    # Page loading, Cloudflare handling, retries
-    ├── helpers.rs       # Price parsing, text extraction utilities
-    ├── search.rs        # Search result extraction
-    ├── product.rs       # Product detail extraction
-    └── extract.rs       # JSON-LD / __NEXT_DATA__ / JS global extraction
-```
-
-## Tech stack
-
-| Component | Library |
-|---|---|
-| CLI framework | [clap](https://docs.rs/clap) (derive API) |
-| Browser automation | [chromiumoxide](https://docs.rs/chromiumoxide) (CDP) |
-| Async runtime | [tokio](https://docs.rs/tokio) |
-| HTML parsing | [scraper](https://docs.rs/scraper) |
-| JSON | [serde](https://docs.rs/serde) + [serde_json](https://docs.rs/serde_json) |
-| Config | [toml](https://docs.rs/toml) + [dirs](https://docs.rs/dirs) |
-| Error handling | [thiserror](https://docs.rs/thiserror) + [anyhow](https://docs.rs/anyhow) |
-
 ## Supported countries
 
 45+ country codes including: `us`, `ca`, `au`, `nz`, `gb`, `de`, `fr`, `ch`, `at`, `it`, `es`, `nl`, `be`, `se`, `no`, `dk`, `fi`, `jp`, `kr`, `cn`, `tw`, `hk`, `sg`, `my`, `th`, `in`, `ae`, `sa`, `il`, `br`, `mx`, `cl`, `co`, `ar`, and more.
-
-## License
-
-MIT
