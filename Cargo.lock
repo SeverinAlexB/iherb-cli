@@ -1149,7 +1149,7 @@ dependencies = [
 
 [[package]]
 name = "iherb-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chromiumoxide",
@@ -1158,6 +1158,7 @@ dependencies = [
  "dirs",
  "futures",
  "hex",
+ "libc",
  "regex",
  "reqwest",
  "scraper",

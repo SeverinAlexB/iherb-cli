@@ -1,6 +1,6 @@
 [package]
 name = "iherb-cli"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "CLI tool for querying iHerb product data"
 
@@ -48,3 +48,6 @@ regex = "1"
 
 # Ctrl+C handling
 ctrlc = { version = "3", features = ["termination"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"

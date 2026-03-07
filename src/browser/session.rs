@@ -66,6 +66,12 @@ impl BrowserSession {
             builder = builder.arg("--headless=new");
         }
 
+        // Chrome refuses to run as root without --no-sandbox
+        #[cfg(target_os = "linux")]
+        if unsafe { libc::geteuid() } == 0 {
+            builder = builder.arg("--no-sandbox");
+        }
+
         let browser_config = builder
             .build()
             .map_err(|e| IherbError::BrowserLaunch(format!("{}", e)))?;
